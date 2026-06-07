@@ -1,0 +1,6 @@
+@UrPulse.Core_HostAddress = http://localhost:5252
+
+GET {{UrPulse.Core_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

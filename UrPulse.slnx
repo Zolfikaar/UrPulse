@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/UrPulse.Client/UrPulse.Client.csproj" />
+    <Project Path="src/UrPulse.Core/UrPulse.Core.csproj" />
+    <Project Path="src/UrPulse.Sample/UrPulse.Sample.csproj" />
+  </Folder>
+</Solution>
