@@ -5,11 +5,6 @@ namespace UrPulse.Client;
 
 public class UrPulseClient : IDisposable
 {
-    private readonly string _twilioSid;
-    private readonly string _twilioToken;
-    private readonly string _twilioFrom;
-    private readonly string _targetPhone;
-
     private readonly HttpClient _httpClient;
     private readonly string _serverUrl;
     private readonly string _appId;
@@ -17,26 +12,14 @@ public class UrPulseClient : IDisposable
     private readonly TimeSpan _interval;
     private Timer? _timer;
     private readonly Process _currentProcess;
-
-    // حدود العتبة لتقييم حالة التطبيق
     private readonly double _maxMemoryHealthyMb;
-
-    // الإعدادات الخاصة بالتنبيهات
-    private readonly string _telegramBotToken;
-    private readonly string _telegramChatId;
 
     public UrPulseClient(
         string serverUrl,
         string appId,
         string serviceName = "General",
         int intervalSeconds = 10,
-        double maxMemoryHealthyMb = 100.0,  // الافتراضي: 100 ميجابايت كحد أقصى للحالة السليمة
-        string telegramBotToken = "",
-        string telegramChatId = "", 
-        string twilioSid = "",
-        string twilioToken = "",
-        string twilioFrom = "",
-        string targetPhone = "")
+        double maxMemoryHealthyMb = 100.0)
     {
         _httpClient = new HttpClient();
         _serverUrl = serverUrl.TrimEnd('/');
@@ -45,13 +28,6 @@ public class UrPulseClient : IDisposable
         _interval = TimeSpan.FromSeconds(intervalSeconds);
         _currentProcess = Process.GetCurrentProcess();
         _maxMemoryHealthyMb = maxMemoryHealthyMb;
-        _telegramBotToken = telegramBotToken;
-        _telegramChatId = telegramChatId;
-
-        _twilioSid = twilioSid;
-        _twilioToken = twilioToken;
-        _twilioFrom = twilioFrom;
-        _targetPhone = targetPhone;
     }
 
     public void Start()
@@ -61,10 +37,8 @@ public class UrPulseClient : IDisposable
         Console.WriteLine($"[Ur Pulse Client] 🚀 Started monitoring for {_appId}:{_serviceName} (RAM Limit: {_maxMemoryHealthyMb}MB)...");
     }
 
-    // دالة هندسة تقييم الحالة بناءً على الموارد الحالية
     private string EvaluateStatus(double currentMemoryMb)
     {
-        // إذا تجاوز استهلاك الذاكرة الحد المسموح، نرسل حالة متدهورة (Degraded) لإنذار السيرفر
         if (currentMemoryMb > _maxMemoryHealthyMb)
         {
             return "Degraded";
@@ -77,21 +51,17 @@ public class UrPulseClient : IDisposable
     {
         try
         {
-
             _currentProcess.Refresh();
 
-            // حساب استهلاك الذاكرة الحالي
             double memoryUsedMb = _currentProcess.PrivateMemorySize64 / (1024.0 * 1024.0);
             TimeSpan cpuTime = _currentProcess.TotalProcessorTime;
-
-            // تقييم الحالة ديناميكياً
             string currentStatus = EvaluateStatus(memoryUsedMb);
 
             var pulse = new
             {
                 AppId = _appId,
                 ServiceName = _serviceName,
-                Status = currentStatus, // الحالة الديناميكية الجديدة
+                Status = currentStatus,
                 Metadata = new Dictionary<string, string>
                 {
                     { "MachineName", Environment.MachineName },
@@ -100,29 +70,7 @@ public class UrPulseClient : IDisposable
                     { "MemoryLimit_MB", _maxMemoryHealthyMb.ToString("F2") },
                     { "TotalCpuTime_Sec", cpuTime.TotalSeconds.ToString("F2") },
                     { "DotNetVersion", Environment.Version.ToString() }
-                },
-                Alerts = new
-                {
-                    EnableAlerts = true,
-                    EscalationThresholdSeconds = 60,
-                    EnableLoudAudioAlert = true,
-                    EnableTelegramAlert = true,
-                    TelegramBotToken = _telegramBotToken, // إرسال التوكن الحقيقي
-                    TelegramChatId = _telegramChatId,     // إرسال الشات آيدي الحقيقي
-
-                    // تمرير بيانات تويليو (سنضع قيمها حية في الـ Sample للتجربة)
-                    EnableVoiceCallAlert = true,
-                    TwilioAccountSid = "",
-                    TwilioAuthToken = "",
-                    TwilioFromNumber = "",
-                    TargetPhoneNumber = "",
-                    CustomVoiceMessage = "Attention! Vector Kanban authentication service has failed. Please check." // أو تركها فارغة للوضع التلقائي
-                },
-
-                TwilioAccountSid = _twilioSid,
-                TwilioAuthToken = _twilioToken,
-                TwilioFromNumber = _twilioFrom,
-                TargetPhoneNumber = _targetPhone
+                }
             };
 
             var response = await _httpClient.PostAsJsonAsync($"{_serverUrl}/api/pulse/heartbeat", pulse);

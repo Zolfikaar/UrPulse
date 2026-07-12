@@ -1,7 +1,9 @@
 ﻿using System.Collections.Concurrent;
-using System.Data;
 using System.Net.Http.Json;
-using System.Threading.Tasks;
+using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using UrPulse.Core.Data;
+using UrPulse.Core.Entities;
 using UrPulse.Core.Models;
 
 namespace UrPulse.Core.Services;
@@ -12,122 +14,142 @@ public class PulseEngine : IDisposable
     private readonly Timer _monitorTimer;
     private readonly TimeSpan _offlineThreshold = TimeSpan.FromSeconds(15);
     private readonly HttpClient _http;
+    private readonly ISecretProvider _secretProvider;
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public PulseEngine()
+    public PulseEngine(ISecretProvider secretProvider, IServiceScopeFactory scopeFactory)
     {
         _http = new HttpClient();
-        // الفحص مستمر كل 5 ثوانٍ
+        _secretProvider = secretProvider;
+        _scopeFactory = scopeFactory;
         _monitorTimer = new Timer(CheckAppHealth, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
     }
 
     public void ProcessPulse(HeartbeatPulse pulse)
     {
-        string key = $"{pulse.AppId}:{pulse.ServiceName}".ToLower();
-        pulse.Timestamp = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
+        pulse.Timestamp = now;
+        pulse.Status = "Healthy";
 
-        if (_activePulses.TryGetValue(key, out var existingPulse))
+        // تحديث أو إضافة النبضة في الذاكرة المؤقتة
+        _activePulses.AddOrUpdate(pulse.AppId, pulse, (key, old) =>
         {
-            if (existingPulse.Status == "Offline")
-            {
-                Console.WriteLine($"\n[Ur Pulse] 🟢 App '{pulse.AppId}' ({pulse.ServiceName}) is BACK ONLINE. Escalation cleared.");
-            }
-            // نسخ حالة التصعيد القديمة لو عاد التطبيق قبل التصعيد
-            pulse.OfflineSince = null;
-            pulse.EscalationTriggered = false;
-        }
+            old.Timestamp = now;
+            old.Status = "Healthy";
+            old.Metadata = pulse.Metadata;
+            return old;
+        });
 
-        _activePulses[key] = pulse;
+        // 🟢 توثيق النبضة الصالحة في السجل التاريخي لقاعدة البيانات (في الخلفية دون حصر الأداء)
+        _ = Task.Run(() => SaveHealthLogAsync(pulse.AppId, pulse.ServiceName, "Healthy", pulse.Metadata));
     }
 
     private void CheckAppHealth(object? state)
     {
         var now = DateTime.UtcNow;
-
         foreach (var item in _activePulses)
         {
             var pulse = item.Value;
-
-            // 1. المرحلة الأولى: رصد الانقطاع الأولي (Offline)
+            // 1. كشف الانقطاع الأولي (بعد 15 ثانية صمت)
             if (pulse.Status != "Offline" && (now - pulse.Timestamp) > _offlineThreshold)
             {
                 pulse.Status = "Offline";
-                pulse.OfflineSince = now; // تسجيل بداية وقت الموت
+                pulse.OfflineSince = now;
                 pulse.EscalationTriggered = false;
 
-                Console.WriteLine($"\n[Ur Pulse] 🚨 OFFLINE DETECTED: '{pulse.AppId}' ({pulse.ServiceName}) went silent.");
+                Console.WriteLine($"\n[Ur Pulse] 🚨 OFFLINE: '{pulse.AppId}' went silent.");
+
+                // توثيق في قاعدة البيانات
+                _ = Task.Run(() => SaveHealthLogAsync(pulse.AppId, pulse.ServiceName, "Offline", pulse.Metadata));
             }
 
-            // 2. المرحلة الثانية: منطق التصعيد الحاد (Escalation) بعد دقيقة
-            if (pulse.Status == "Offline" && pulse.OfflineSince.HasValue && !pulse.EscalationTriggered)
+            // 2. شرط التصعيد الحرج (مرور 60 ثانية دون عودة النبض، ولم يتم التصعيد بعد)
+            if (pulse.Status == "Offline" && !pulse.EscalationTriggered && pulse.OfflineSince.HasValue)
             {
-                var timeSpentOffline = now - pulse.OfflineSince.Value;
-
-                if (pulse.Alerts.EnableAlerts && timeSpentOffline.TotalSeconds >= pulse.Alerts.EscalationThresholdSeconds)
+                // هنا نقرأ الـ Threshold ديناميكياً من الخزنة المحاكية (مثلاً 60 ثانية)
+                _ = Task.Run(async () =>
                 {
-                    pulse.EscalationTriggered = true; // علامة لمنع تكرار الإنذار
+                    var secureAlerts = await _secretProvider.GetAlertSettingsAsync(pulse.AppId);
+                    int threshold = secureAlerts?.EscalationThresholdSeconds ?? 60;
 
-                    TriggerCriticalEscalation(pulse);
-                }
+                    if ((now - pulse.OfflineSince.Value).TotalSeconds >= threshold)
+                    {
+                        pulse.EscalationTriggered = true; // نرفع العلم لمنع تكرار التنبيه
+
+                        // استدعاء الدالة التصعيد 
+                        TriggerCriticalEscalation(pulse);
+                    }
+                });
             }
         }
     }
 
-    // إطلاق الإجراءات الحادة والتنبيهات المزعجة
-    private async Task TriggerCriticalEscalation(HeartbeatPulse pulse)
+    private async Task SaveHealthLogAsync(string appId, string serviceName, string status, Dictionary<string, string> metadata)
     {
-        Console.WriteLine("\n=======================================================");
-        Console.WriteLine($"🔥 [CRITICAL ESCALATION] !!! CRISIS ALERT !!!");
-        Console.WriteLine($"🔥 App '{pulse.AppId}' ({pulse.ServiceName}) has been OFFLINE for over {pulse.Alerts.EscalationThresholdSeconds} seconds!");
-
-        if (pulse.Alerts.EnableLoudAudioAlert)
+        try
         {
-            // إطلاق صوت إنذار من النظام عبر السيرفر !
-            Task.Run(() => {
-                for (int i = 0; i < 5; i++)
-                {
-                    Console.Beep(1500, 600); // تردد مزعج (1500Hz) لمدة تزيد عن نصف ثانية
-                    Thread.Sleep(200);
-                }
-            });
-            Console.WriteLine("🔊 [LOUD AUDIO] Playing fire-alarm beep style notification on target device...");
-        }
+            // إنشاء Scope معزول لاستدعاء الـ DbContext بشكل Thread-safe
+            using var scope = _scopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<UrPulseDbContext>();
 
-        if (!string.IsNullOrEmpty(pulse.Alerts.WebhookUrl))
+            var logEntry = new HealthLog
+            {
+                Id = Guid.NewGuid(),
+                AppId = appId,
+                ServiceName = serviceName,
+                Status = status,
+                Timestamp = DateTime.UtcNow,
+                HardwareMetricsJson = JsonSerializer.Serialize(metadata) // تحويل الديكشنري لنص JSON مرن
+            };
+
+            dbContext.HealthLogs.Add(logEntry);
+            await dbContext.SaveChangesAsync();
+        }
+        catch (Exception ex)
         {
-            Console.WriteLine($"🌐 [Webhook] Sending urgent payload to external network: {pulse.Alerts.WebhookUrl}");
+            Console.WriteLine($"💾 [Database Error] Failed to write health log: {ex.Message}");
         }
-
-        //  إرسال التنبيه الفوري إلى تليغرام المستخدم!
-        if (pulse.Alerts.EnableTelegramAlert && !string.IsNullOrEmpty(pulse.Alerts.TelegramBotToken) && !string.IsNullOrEmpty(pulse.Alerts.TelegramChatId))
-        {
-            // صياغة رسالة إنذار دراماتيكية مدعومة بالإيموجي لتلفت الانتباه فوراً
-            string message = $"🚨 *CRITICAL ALERT | Ur Pulse* 🚨\n\n" +
-                             $"🔥 *Project:* `{pulse.AppId}`\n" +
-                             $"⚙️ *Service:* `{pulse.ServiceName}`\n" +
-                             $"⚠️ *Status:* `OFFLINE` 🔴\n" +
-                             $"⏱️ *Downtime:* Over {pulse.Alerts.EscalationThresholdSeconds} seconds!\n" +
-                             $"📅 *Time:* {DateTime.UtcNow.ToLocalTime()}\n\n" +
-                             $"📢 _Action Required: Please check the system infrastructure immediately!_";
-            // استدعاء دالة الإرسال في الخلفية لضمان عدم حصر السيرفر
-            _= Task.Run(() => SendTelegramMessageAsync(pulse.Alerts.TelegramBotToken, pulse.Alerts.TelegramChatId, message));
-
-        }
-
-        // 3. إطلاق لفل البريميوم: الاتصال بهاتف المستخدم عبر Twilio
-        if (pulse.Alerts.EnableVoiceCallAlert &&
-            !string.IsNullOrEmpty(pulse.Alerts.TwilioAccountSid) &&
-            !string.IsNullOrEmpty(pulse.Alerts.TwilioAuthToken))
-        {
-            // صياغة الرسالة الصوتية التي سينطقها الروبوت للعميل عند فتح الخط
-            string voiceMessage = $"Urgent alert from Ur Pulse system! Your project {pulse.AppId}, service {pulse.ServiceName}, is offline. Please review your core infrastructure immediately.";
-
-            // إطلاق المكالمة في الخلفية دون حصر أداء السيرفر
-            _ = Task.Run(() => MakeVoiceCallAsync(pulse.Alerts, voiceMessage, pulse));
-        }
-        Console.WriteLine("=======================================================");
     }
 
-    // الدالة المسؤولة عن مخاطبة Telegram API برمجياً
+
+    private void TriggerCriticalEscalation(HeartbeatPulse pulse)
+    {
+        _ = Task.Run(async () =>
+        {
+            Console.WriteLine($"\n🔥 [CRITICAL ESCALATION] !!! CRISIS ALERT !!!");
+
+            // سحب أسرار التطبيق من محاكي الخزنة (JSON)
+            var secureAlerts = await _secretProvider.GetAlertSettingsAsync(pulse.AppId);
+            if (secureAlerts == null || !secureAlerts.EnableAlerts) return;
+
+            // 1. الصوت المحلي
+            if (secureAlerts.EnableLoudAudioAlert)
+            {
+                for (int i = 0; i < 3; i++) { Console.Beep(1500, 500); Thread.Sleep(100); }
+            }
+
+            // 2. إرسال تليغرام
+            if (secureAlerts.EnableTelegramAlert && !string.IsNullOrEmpty(secureAlerts.TelegramBotToken))
+            {
+                string message = $"🚨 *CRITICAL ALERT | Ur Pulse* 🚨\n\n" +
+                                 $"🔥 *Project:* `{pulse.AppId}`\n" +
+                                 $"⚙️ *Service:* `{pulse.ServiceName}`\n" +
+                                 $"⚠️ *Status:* `OFFLINE` 🔴";
+                _ = SendTelegramMessageAsync(secureAlerts.TelegramBotToken, secureAlerts.TelegramChatId, message);
+            }
+
+            // 3. اتصال تويليو بالإنجليزية مع الرسالة المخصصة
+            if (secureAlerts.EnableVoiceCallAlert && !string.IsNullOrEmpty(secureAlerts.TwilioAccountSid))
+            {
+                string voiceMessage = !string.IsNullOrWhiteSpace(secureAlerts.CustomVoiceMessage)
+                    ? secureAlerts.CustomVoiceMessage
+                    : $"Urgent alert from Ur Pulse! Your project {pulse.AppId} is offline.";
+
+                _ = MakeVoiceCallAsync(secureAlerts, voiceMessage);
+            }
+        });
+    }
+
     private async Task SendTelegramMessageAsync(string token, string chatId, string message)
     {
         try
@@ -137,7 +159,7 @@ public class PulseEngine : IDisposable
             {
                 chat_id = chatId,
                 text = message,
-                parse_mode = "Markdown" // لتنسيق النصوص وجعل الخط عريضاً ومثيراً للاهتمام
+                parse_mode = "Markdown"
             };
 
             var response = await _http.PostAsJsonAsync(url, payload);
@@ -156,33 +178,27 @@ public class PulseEngine : IDisposable
         }
     }
 
-    private async Task MakeVoiceCallAsync(AlertSettings alerts, string message, HeartbeatPulse pulse)
+    private async Task MakeVoiceCallAsync(AlertSettings alerts, string message)
     {
         try
         {
             string url = $"https://api.twilio.com/2010-04-01/Accounts/{alerts.TwilioAccountSid}/Calls.json";
+            string twiml = $"<Response><Say language=\"ar-XA\" voice=\"Polly.Zeina\">{message}</Say></Response>";
 
-            // إذا وضع المستخدم رسالة مخصصة نستخدمها، وإلا نستخدم الرسالة الافتراضية بالإنجليزية
-            string voiceMessage = !string.IsNullOrWhiteSpace(pulse.Alerts.CustomVoiceMessage)
-                ? pulse.Alerts.CustomVoiceMessage
-                : $"Urgent alert from Ur Pulse! Your project {pulse.AppId}, service {pulse.ServiceName}, is offline.";
-            // استخدام لغة TwiML (مستند XML بسيط يفهمه سيرفر تويليو ليقرأ النص)
-            string twiml = $"<Response><Say language=\"ar-XA\" voice=\"Polly.Zeina\">{voiceMessage}</Say></Response>";
-            // إعداد بيانات الطلب (Form URL Encoded) كما يتوقعها بروتوكول تويليو
             var requestData = new Dictionary<string, string>
-        {
-            { "To", alerts.TargetPhoneNumber },
-            { "From", alerts.TwilioFromNumber },
-            { "Twiml", twiml }
-        };
+            {
+                { "To", alerts.TargetPhoneNumber },
+                { "From", alerts.TwilioFromNumber },
+                { "Twiml", twiml }
+            };
 
             var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = new FormUrlEncodedContent(requestData)
             };
 
-            // تشفير الـ Account SID والـ Auth Token باستخدام Basic Authentication
-            string credentials = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"{alerts.TwilioAccountSid}:{alerts.TwilioAuthToken}"));
+            string credentials = Convert.ToBase64String(
+                System.Text.Encoding.ASCII.GetBytes($"{alerts.TwilioAccountSid}:{alerts.TwilioAuthToken}"));
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
 
             var response = await _http.SendAsync(request);
@@ -203,10 +219,7 @@ public class PulseEngine : IDisposable
         }
     }
 
-    public IEnumerable<HeartbeatPulse> GetAllStatuses()
-    {
-        return _activePulses.Values;
-    }
+    public IEnumerable<HeartbeatPulse> GetAllStatuses() => _activePulses.Values;
 
     public void Dispose()
     {

@@ -1,30 +1,21 @@
 ﻿using UrPulse.Client;
 
-Console.WriteLine("=== Ur Labs: Ur Pulse Telegram Test ===");
+Console.WriteLine("=== Ur Labs: Ur Pulse Heartbeat Test ===");
 
-// 1. أدخل هنا البيانات الحقيقية التي حصلت عليها من تليغرام
-string myBotToken = "8872261192:AAHtkgvTJrTiouiXfcrUkWqlOdNdw8GFS88";
-string myChatId = "382008027";
-
-
-
-// 2. تشغيل العميل
 using var pulseClient = new UrPulseClient(
     serverUrl: "http://localhost:5252",
     appId: "vector-kanban",
     serviceName: "Auth-Service",
-    intervalSeconds: 5,
-    telegramBotToken: myBotToken,
-    telegramChatId: myChatId
+    intervalSeconds: 5
 );
 
 pulseClient.Start();
 
-Console.WriteLine("Press any key to simulate a CRASH and test Telegram Alert...");
+Console.WriteLine("Press any key to simulate a CRASH and test server-side escalation...");
 Console.ReadKey();
 
-// إيقاف العميل فوراً لبدء الـ 60 ثانية الخاصة بالتصعيد
 pulseClient.Stop();
-Console.WriteLine("Sample stopped. Server countdown started. Keep an eye on your Telegram app! After 60 seconds, the bot will speak!");
+Console.WriteLine("Sample stopped. Server countdown started. Alert settings are loaded from UrPulse.Core/appsettings.json.");
+Console.WriteLine("After ~15s the service goes Offline; after the configured escalation threshold, alerts fire.");
 
 Console.ReadKey();
