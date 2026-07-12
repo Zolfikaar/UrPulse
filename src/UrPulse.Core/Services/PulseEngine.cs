@@ -12,17 +12,42 @@ public class PulseEngine : IDisposable
 {
     private readonly ConcurrentDictionary<string, HeartbeatPulse> _activePulses = new();
     private readonly Timer _monitorTimer;
-    private readonly TimeSpan _offlineThreshold = TimeSpan.FromSeconds(15);
+    private readonly object _timerLock = new();
+    private TimeSpan _offlineThreshold = TimeSpan.FromSeconds(20);
+    private TimeSpan _timerInterval = TimeSpan.FromSeconds(5);
     private readonly HttpClient _http;
     private readonly ISecretProvider _secretProvider;
     private readonly IServiceScopeFactory _scopeFactory;
+
+    public int GetOfflineThresholdSeconds() => (int)_offlineThreshold.TotalSeconds;
+
+    public int GetTimerIntervalSeconds() => (int)_timerInterval.TotalSeconds;
+
+    public void UpdateOfflineThresholdSeconds(int seconds)
+    {
+        _offlineThreshold = TimeSpan.FromSeconds(seconds);
+        Console.WriteLine($"⚙️ [System Config] Global Offline Threshold updated to: {seconds} seconds.");
+    }
+
+    /// <summary>
+    /// Thread-safely retunes the health-sweeper cadence without recreating the timer.
+    /// </summary>
+    public void UpdateTimerIntervalSeconds(int seconds)
+    {
+        lock (_timerLock)
+        {
+            _timerInterval = TimeSpan.FromSeconds(seconds);
+            _monitorTimer.Change(TimeSpan.Zero, _timerInterval);
+            Console.WriteLine($"⚙️ [System Config] Monitor scan interval updated to: {seconds} seconds.");
+        }
+    }
 
     public PulseEngine(ISecretProvider secretProvider, IServiceScopeFactory scopeFactory)
     {
         _http = new HttpClient();
         _secretProvider = secretProvider;
         _scopeFactory = scopeFactory;
-        _monitorTimer = new Timer(CheckAppHealth, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
+        _monitorTimer = new Timer(CheckAppHealth, null, TimeSpan.Zero, _timerInterval);
     }
 
     public void ProcessPulse(HeartbeatPulse pulse)

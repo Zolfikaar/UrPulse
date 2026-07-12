@@ -64,14 +64,14 @@ app.MapGet("/api/pulse/status", (PulseEngine engine) =>
     return Results.Ok(engine.GetAllStatuses());
 });
 
-// 3. Endpoint لجلب كامل السجل التاريخي لجميع التطبيقات
+// 3. Endpoint لجلب كامل السجل التاريخي لجميع التطبيقات (معاينة محدودة للوحة التحكم)
 app.MapGet("/api/pulse/logs", async (UrPulseDbContext dbContext) =>
 {
     try
     {
         var logs = await dbContext.HealthLogs
             .OrderByDescending(l => l.Timestamp)
-            .Take(100) // نكتفي بآخر 100 سجل لمنع ثقل الشبكة
+            .Take(20)
             .ToListAsync();
 
         return Results.Ok(logs);
@@ -82,7 +82,39 @@ app.MapGet("/api/pulse/logs", async (UrPulseDbContext dbContext) =>
     }
 });
 
-// 4. Endpoint لجلب السجل التاريخي لتطبيق محدد (مثال: vector-kanban)
+// 4. Endpoint للسجلات مع Pagination من جهة السيرفر (يجب تسجيله قبل {appId})
+app.MapGet("/api/pulse/logs/paginated", async (int? page, int? pageSize, UrPulseDbContext dbContext) =>
+{
+    try
+    {
+        var currentPage = Math.Max(1, page ?? 1);
+        var size = Math.Clamp(pageSize ?? 20, 1, 100);
+
+        var totalCount = await dbContext.HealthLogs.CountAsync();
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)size);
+
+        var logs = await dbContext.HealthLogs
+            .OrderByDescending(l => l.Timestamp)
+            .Skip((currentPage - 1) * size)
+            .Take(size)
+            .ToListAsync();
+
+        return Results.Ok(new
+        {
+            totalCount,
+            page = currentPage,
+            pageSize = size,
+            totalPages,
+            logs
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Failed to retrieve paginated health logs: {ex.Message}");
+    }
+});
+
+// 5. Endpoint لجلب السجل التاريخي لتطبيق محدد (مثال: vector-kanban)
 app.MapGet("/api/pulse/logs/{appId}", async (string appId, UrPulseDbContext dbContext) =>
 {
     try
@@ -101,7 +133,7 @@ app.MapGet("/api/pulse/logs/{appId}", async (string appId, UrPulseDbContext dbCo
     }
 });
 
-// 5. Endpoint لجلب إعدادات تطبيق معين من الخزنة (لتعبئة حقول الواجهة)
+// 6. Endpoint لجلب إعدادات تطبيق معين من الخزنة (لتعبئة حقول الواجهة)
 app.MapGet("/api/vault/settings/{appId}", async (string appId, ISecretProvider secretProvider) =>
 {
     var settings = await secretProvider.GetAlertSettingsAsync(appId);
@@ -113,7 +145,7 @@ app.MapGet("/api/vault/settings/{appId}", async (string appId, ISecretProvider s
     return Results.Ok(settings);
 });
 
-// 6. Endpoint لتحديث أو حفظ إعدادات تطبيق داخل الخزنة
+// 7. Endpoint لتحديث أو حفظ إعدادات تطبيق داخل الخزنة
 app.MapPost("/api/vault/settings/{appId}", async (string appId, AlertSettings newSettings, ISecretProvider secretProvider) =>
 {
     if (string.IsNullOrWhiteSpace(appId))
@@ -131,5 +163,40 @@ app.MapPost("/api/vault/settings/{appId}", async (string appId, AlertSettings ne
     return Results.Problem("Failed to write settings to the secure distribution vault storage.");
 });
 
+// 8. Unified system settings — offline deadline + monitor scan interval
+app.MapGet("/api/settings/system", (PulseEngine engine) =>
+{
+    return Results.Ok(new
+    {
+        thresholdSeconds = engine.GetOfflineThresholdSeconds(),
+        intervalSeconds = engine.GetTimerIntervalSeconds()
+    });
+});
+
+app.MapPost("/api/settings/system", (SystemSettingsModel model, PulseEngine engine) =>
+{
+    if (model.ThresholdSeconds < 5 || model.ThresholdSeconds > 300)
+    {
+        return Results.BadRequest("ThresholdSeconds must be between 5 and 300.");
+    }
+
+    if (model.IntervalSeconds < 1 || model.IntervalSeconds > 60)
+    {
+        return Results.BadRequest("IntervalSeconds must be between 1 and 60.");
+    }
+
+    engine.UpdateOfflineThresholdSeconds(model.ThresholdSeconds);
+    engine.UpdateTimerIntervalSeconds(model.IntervalSeconds);
+
+    return Results.Ok(new
+    {
+        message = "System settings updated successfully.",
+        thresholdSeconds = model.ThresholdSeconds,
+        intervalSeconds = model.IntervalSeconds
+    });
+});
+
+
 app.Run();
 
+public record SystemSettingsModel(int ThresholdSeconds, int IntervalSeconds);
