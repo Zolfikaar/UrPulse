@@ -17,7 +17,21 @@ builder.Services.AddSingleton<ISecretProvider, LocalJsonSecretProvider>();
 
 // 2. تسجيل الـ PulseEngine كـ Singleton ليبقى حياً طوال فترة تشغيل السيرفر
 builder.Services.AddSingleton<PulseEngine>();
+
+// للسماح بتطبيق Nuxt باللإتصال مع السيرفر و تجاوز ال CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowNuxtFrontend", policy =>
+    {
+        policy.WithOrigins("http://localhost:3000", "http://localhost:3000/") // منفذ Nuxt الشهير
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
+
 var app = builder.Build();
+
+app.UseCors("AllowNuxtFrontend");
 
 // تأكد من استدعاء الـ Engine عند إقلاع السيرفر ليبدأ التايمر بالعمل فوراً
 app.Services.GetRequiredService<PulseEngine>();
@@ -85,6 +99,36 @@ app.MapGet("/api/pulse/logs/{appId}", async (string appId, UrPulseDbContext dbCo
     {
         return Results.Problem($"Failed to retrieve logs for app {appId}: {ex.Message}");
     }
+});
+
+// 5. Endpoint لجلب إعدادات تطبيق معين من الخزنة (لتعبئة حقول الواجهة)
+app.MapGet("/api/vault/settings/{appId}", async (string appId, ISecretProvider secretProvider) =>
+{
+    var settings = await secretProvider.GetAlertSettingsAsync(appId);
+    if (settings == null)
+    {
+        // إذا لم تكن هناك إعدادات، نعيد كائن فارغ افتراضي لتسهيل التعامل في الفرونت إند
+        return Results.Ok(new AlertSettings { EnableAlerts = false });
+    }
+    return Results.Ok(settings);
+});
+
+// 6. Endpoint لتحديث أو حفظ إعدادات تطبيق داخل الخزنة
+app.MapPost("/api/vault/settings/{appId}", async (string appId, AlertSettings newSettings, ISecretProvider secretProvider) =>
+{
+    if (string.IsNullOrWhiteSpace(appId))
+    {
+        return Results.BadRequest("Invalid Application ID.");
+    }
+
+    var success = await secretProvider.SaveAlertSettingsAsync(appId, newSettings);
+
+    if (success)
+    {
+        return Results.Ok(new { message = $"Vault settings updated successfully for '{appId}'." });
+    }
+
+    return Results.Problem("Failed to write settings to the secure distribution vault storage.");
 });
 
 app.Run();
