@@ -12,18 +12,17 @@ builder.Services.AddDbContext<UrPulseDbContext>(options =>
 
 builder.Services.AddOpenApi();
 
-// 1. تسجيل الـ Secret Provider (محاكي الخزنة المعتمد على الـ JSON)
-builder.Services.AddSingleton<ISecretProvider, LocalJsonSecretProvider>();
+// Unified global settings provider (persists UrPulseSettings to appsettings.json)
+builder.Services.AddSingleton<IUrPulseSettingsProvider, LocalJsonSettingsProvider>();
 
-// 2. تسجيل الـ PulseEngine كـ Singleton ليبقى حياً طوال فترة تشغيل السيرفر
+// PulseEngine as Singleton — stays alive for the process lifetime
 builder.Services.AddSingleton<PulseEngine>();
 
-// للسماح بتطبيق Nuxt باللإتصال مع السيرفر و تجاوز ال CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowNuxtFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:3000", "http://localhost:3000/") // منفذ Nuxt الشهير
+        policy.WithOrigins("http://localhost:3000", "http://localhost:3001")
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
@@ -33,10 +32,9 @@ var app = builder.Build();
 
 app.UseCors("AllowNuxtFrontend");
 
-// تأكد من استدعاء الـ Engine عند إقلاع السيرفر ليبدأ التايمر بالعمل فوراً
+// Ensure Engine starts its monitor timer immediately
 app.Services.GetRequiredService<PulseEngine>();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -44,7 +42,6 @@ if (app.Environment.IsDevelopment())
 
 //app.UseHttpsRedirection();
 
-// 1. نقطة استقبال النبضات من المشاريع (POST)
 app.MapPost("/api/pulse/heartbeat", (HeartbeatPulse pulse, PulseEngine engine) =>
 {
     if (string.IsNullOrWhiteSpace(pulse.AppId))
@@ -52,19 +49,29 @@ app.MapPost("/api/pulse/heartbeat", (HeartbeatPulse pulse, PulseEngine engine) =
         return Results.BadRequest("AppId is required.");
     }
 
-    pulse.Timestamp = DateTime.UtcNow; // توثيق وقت الاستلام على السيرفر
+    pulse.Timestamp = DateTime.UtcNow;
     engine.ProcessPulse(pulse);
 
     return Results.Ok(new { Message = "Pulse received successfully." });
 });
 
-// 2. نقطة استعراض لوحة التحكم (GET) لرؤية حالة كل المشاريع الحالية
+// Public client timing contract — no secrets. Monitored apps must follow these values.
+app.MapGet("/api/pulse/client-config", (PulseEngine engine) =>
+{
+    return Results.Ok(new
+    {
+        heartbeatIntervalSeconds = engine.GetHeartbeatIntervalSeconds(),
+        offlineThresholdSeconds = engine.GetOfflineThresholdSeconds(),
+        escalationDelaySeconds = engine.GetEscalationDelaySeconds(),
+        scanIntervalSeconds = engine.GetTimerIntervalSeconds()
+    });
+});
+
 app.MapGet("/api/pulse/status", (PulseEngine engine) =>
 {
     return Results.Ok(engine.GetAllStatuses());
 });
 
-// 3. Endpoint لجلب كامل السجل التاريخي لجميع التطبيقات (معاينة محدودة للوحة التحكم)
 app.MapGet("/api/pulse/logs", async (UrPulseDbContext dbContext) =>
 {
     try
@@ -82,7 +89,6 @@ app.MapGet("/api/pulse/logs", async (UrPulseDbContext dbContext) =>
     }
 });
 
-// 4. Endpoint للسجلات مع Pagination من جهة السيرفر (يجب تسجيله قبل {appId})
 app.MapGet("/api/pulse/logs/paginated", async (int? page, int? pageSize, UrPulseDbContext dbContext) =>
 {
     try
@@ -114,7 +120,6 @@ app.MapGet("/api/pulse/logs/paginated", async (int? page, int? pageSize, UrPulse
     }
 });
 
-// 5. Endpoint لجلب السجل التاريخي لتطبيق محدد (مثال: vector-kanban)
 app.MapGet("/api/pulse/logs/{appId}", async (string appId, UrPulseDbContext dbContext) =>
 {
     try
@@ -133,70 +138,67 @@ app.MapGet("/api/pulse/logs/{appId}", async (string appId, UrPulseDbContext dbCo
     }
 });
 
-// 6. Endpoint لجلب إعدادات تطبيق معين من الخزنة (لتعبئة حقول الواجهة)
-app.MapGet("/api/vault/settings/{appId}", async (string appId, ISecretProvider secretProvider) =>
+// Unified global system + alerting configuration
+app.MapGet("/api/settings/system", async (IUrPulseSettingsProvider settingsProvider, PulseEngine engine) =>
 {
-    var settings = await secretProvider.GetAlertSettingsAsync(appId);
-    if (settings == null)
-    {
-        // إذا لم تكن هناك إعدادات، نعيد كائن فارغ افتراضي لتسهيل التعامل في الفرونت إند
-        return Results.Ok(new AlertSettings { EnableAlerts = false });
-    }
+    var settings = await settingsProvider.GetSettingsAsync();
+
+    // Prefer live engine values for runtime-tuned thresholds
+    settings.GlobalHeartbeatIntervalSeconds = engine.GetHeartbeatIntervalSeconds();
+    settings.GlobalOfflineThresholdSeconds = engine.GetOfflineThresholdSeconds();
+    settings.GlobalScanIntervalSeconds = engine.GetTimerIntervalSeconds();
+    settings.GlobalEscalationDelaySeconds = engine.GetEscalationDelaySeconds();
+
     return Results.Ok(settings);
 });
 
-// 7. Endpoint لتحديث أو حفظ إعدادات تطبيق داخل الخزنة
-app.MapPost("/api/vault/settings/{appId}", async (string appId, AlertSettings newSettings, ISecretProvider secretProvider) =>
+app.MapPost("/api/settings/system", async (UrPulseSettings model, IUrPulseSettingsProvider settingsProvider, PulseEngine engine) =>
 {
-    if (string.IsNullOrWhiteSpace(appId))
+    if (model.GlobalHeartbeatIntervalSeconds < 5 || model.GlobalHeartbeatIntervalSeconds > 60)
     {
-        return Results.BadRequest("Invalid Application ID.");
+        return Results.BadRequest("GlobalHeartbeatIntervalSeconds must be between 5 and 60.");
     }
 
-    var success = await secretProvider.SaveAlertSettingsAsync(appId, newSettings);
-
-    if (success)
+    if (model.GlobalOfflineThresholdSeconds < 5 || model.GlobalOfflineThresholdSeconds > 300)
     {
-        return Results.Ok(new { message = $"Vault settings updated successfully for '{appId}'." });
+        return Results.BadRequest("GlobalOfflineThresholdSeconds must be between 5 and 300.");
     }
 
-    return Results.Problem("Failed to write settings to the secure distribution vault storage.");
-});
+    if (model.GlobalScanIntervalSeconds < 1 || model.GlobalScanIntervalSeconds > 60)
+    {
+        return Results.BadRequest("GlobalScanIntervalSeconds must be between 1 and 60.");
+    }
 
-// 8. Unified system settings — offline deadline + monitor scan interval
-app.MapGet("/api/settings/system", (PulseEngine engine) =>
-{
+    if (model.GlobalEscalationDelaySeconds < 0 || model.GlobalEscalationDelaySeconds > 600)
+    {
+        return Results.BadRequest("GlobalEscalationDelaySeconds must be between 0 and 600.");
+    }
+
+    if (model.GlobalHeartbeatIntervalSeconds >= model.GlobalOfflineThresholdSeconds)
+    {
+        return Results.BadRequest("GlobalHeartbeatIntervalSeconds must be less than GlobalOfflineThresholdSeconds.");
+    }
+
+    model.Telegram ??= new TelegramSettings();
+    model.Twilio ??= new TwilioSettings();
+
+    var success = await settingsProvider.SaveSettingsAsync(model);
+    if (!success)
+    {
+        return Results.Problem("Failed to persist UrPulseSettings to storage.");
+    }
+
+    engine.ApplyRuntimeTuning(
+        model.GlobalHeartbeatIntervalSeconds,
+        model.GlobalOfflineThresholdSeconds,
+        model.GlobalScanIntervalSeconds,
+        model.GlobalEscalationDelaySeconds);
+
     return Results.Ok(new
     {
-        thresholdSeconds = engine.GetOfflineThresholdSeconds(),
-        intervalSeconds = engine.GetTimerIntervalSeconds()
+        message = "Global system & alerting configuration saved.",
+        settings = model
     });
 });
-
-app.MapPost("/api/settings/system", (SystemSettingsModel model, PulseEngine engine) =>
-{
-    if (model.ThresholdSeconds < 5 || model.ThresholdSeconds > 300)
-    {
-        return Results.BadRequest("ThresholdSeconds must be between 5 and 300.");
-    }
-
-    if (model.IntervalSeconds < 1 || model.IntervalSeconds > 60)
-    {
-        return Results.BadRequest("IntervalSeconds must be between 1 and 60.");
-    }
-
-    engine.UpdateOfflineThresholdSeconds(model.ThresholdSeconds);
-    engine.UpdateTimerIntervalSeconds(model.IntervalSeconds);
-
-    return Results.Ok(new
-    {
-        message = "System settings updated successfully.",
-        thresholdSeconds = model.ThresholdSeconds,
-        intervalSeconds = model.IntervalSeconds
-    });
-});
-
 
 app.Run();
-
-public record SystemSettingsModel(int ThresholdSeconds, int IntervalSeconds);

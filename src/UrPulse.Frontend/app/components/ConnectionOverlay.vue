@@ -1,14 +1,14 @@
 <template>
+  <!-- Viewport-locking gate: opaque cover hides any orphaned/layout-leaked cards -->
   <div
-    class="relative flex min-h-[calc(100vh-7.5rem)] flex-col"
+    class="fixed inset-0 z-50 flex flex-col bg-[#0B0F19]"
     role="status"
     aria-live="polite"
   >
-    <!-- Loading: full-body blocking spinner -->
+    <!-- Loading: full-viewport blocking spinner -->
     <div
       v-if="connectionStatus === 'loading'"
-      class="absolute inset-0 z-20 flex items-center justify-center
-        bg-pulse-bg/80 backdrop-blur-md animate-fade-in"
+      class="flex flex-1 items-center justify-center animate-fade-in"
     >
       <div class="flex flex-col items-center gap-5">
         <div class="relative flex h-28 w-28 items-center justify-center">
@@ -86,6 +86,7 @@
     </div>
   </div>
 </template>
+
 
 <script setup lang="ts">
 import type { ConnectionStatus } from '~/composables/usePulseConnection'

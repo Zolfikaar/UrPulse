@@ -28,26 +28,37 @@ export interface PaginatedHealthLogs {
   totalPages: number
 }
 
-/** Response from GET /api/settings/system */
-export interface SystemSettings {
-  thresholdSeconds: number
-  intervalSeconds: number
+/** Public timing contract for monitored apps — GET /api/pulse/client-config */
+export interface PulseClientConfig {
+  heartbeatIntervalSeconds: number
+  offlineThresholdSeconds: number
+  escalationDelaySeconds: number
+  scanIntervalSeconds: number
 }
 
-/** Mirrors UrPulse.Core.Models.AlertSettings */
-export interface AlertSettings {
+/** Mirrors UrPulse.Core.Models.UrPulseSettings — global system + alerting */
+export interface TelegramSettings {
+  botToken: string
+  chatId: string
+}
+
+export interface TwilioSettings {
+  accountSid: string
+  authToken: string
+  fromNumber: string
+  toNumber: string
+  voiceMessage: string
+}
+
+export interface UrPulseSettings {
+  globalHeartbeatIntervalSeconds: number
+  globalOfflineThresholdSeconds: number
+  globalScanIntervalSeconds: number
+  globalEscalationDelaySeconds: number
   enableAlerts: boolean
-  escalationThresholdSeconds: number
-  enableLoudAudioAlert: boolean
-  enableTelegramAlert: boolean
-  telegramBotToken: string
-  telegramChatId: string
-  enableVoiceCallAlert: boolean
-  twilioAccountSid: string
-  twilioAuthToken: string
-  twilioFromNumber: string
-  targetPhoneNumber: string
-  customVoiceMessage: string
+  localAudioAlerts: boolean
+  telegram: TelegramSettings
+  twilio: TwilioSettings
 }
 
 export type ToastType = 'success' | 'error' | 'info'
@@ -59,19 +70,24 @@ export interface ToastMessage {
   message: string
 }
 
-export function createDefaultAlertSettings(): AlertSettings {
+export function createDefaultUrPulseSettings(): UrPulseSettings {
   return {
-    enableAlerts: false,
-    escalationThresholdSeconds: 60,
-    enableLoudAudioAlert: true,
-    enableTelegramAlert: false,
-    telegramBotToken: '',
-    telegramChatId: '',
-    enableVoiceCallAlert: false,
-    twilioAccountSid: '',
-    twilioAuthToken: '',
-    twilioFromNumber: '',
-    targetPhoneNumber: '',
-    customVoiceMessage: '',
+    globalHeartbeatIntervalSeconds: 10,
+    globalOfflineThresholdSeconds: 20,
+    globalScanIntervalSeconds: 5,
+    globalEscalationDelaySeconds: 30,
+    enableAlerts: true,
+    localAudioAlerts: true,
+    telegram: {
+      botToken: '',
+      chatId: '',
+    },
+    twilio: {
+      accountSid: '',
+      authToken: '',
+      fromNumber: '',
+      toNumber: '',
+      voiceMessage: '',
+    },
   }
 }

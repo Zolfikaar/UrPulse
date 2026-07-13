@@ -39,13 +39,13 @@
             :key="log.id"
             class="border-b border-pulse-border/30 transition-colors duration-150 hover:bg-white/[0.03]"
           >
-            <td class="px-5 py-3 font-mono text-xs text-slate-300" :title="formatAbsoluteTimestamp(log.timestamp)">
+            <td class="max-w-[12rem] truncate px-5 py-3 font-mono text-xs text-slate-300" :title="formatAbsoluteTimestamp(log.timestamp)">
               {{ formatAbsoluteTimestamp(log.timestamp) }}
             </td>
-            <td class="px-5 py-3 font-mono text-xs text-cyan-300/90">
+            <td class="max-w-[10rem] truncate px-5 py-3 font-mono text-xs text-cyan-300/90" :title="log.appId">
               {{ log.appId }}
             </td>
-            <td class="px-5 py-3 text-slate-300">
+            <td class="max-w-[10rem] truncate px-5 py-3 text-slate-300" :title="log.serviceName">
               {{ log.serviceName }}
             </td>
             <td class="px-5 py-3">

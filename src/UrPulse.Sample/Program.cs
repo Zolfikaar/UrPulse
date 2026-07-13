@@ -6,7 +6,7 @@ using var pulseClient = new UrPulseClient(
     serverUrl: "http://localhost:5252",
     appId: "vector-kanban",
     serviceName: "Auth-Service",
-    intervalSeconds: 5
+    intervalSeconds: 10 // fallback only — Core GET /api/pulse/client-config wins
 );
 
 pulseClient.Start();
@@ -15,7 +15,8 @@ Console.WriteLine("Press any key to simulate a CRASH and test server-side escala
 Console.ReadKey();
 
 pulseClient.Stop();
-Console.WriteLine("Sample stopped. Server countdown started. Alert settings are loaded from UrPulse.Core/appsettings.json.");
-Console.WriteLine("After ~15s the service goes Offline; after the configured escalation threshold, alerts fire.");
+Console.WriteLine("Sample stopped. Timing is controlled by UrPulse Core settings:");
+Console.WriteLine("  1) Offline after GlobalOfflineThresholdSeconds of silence");
+Console.WriteLine("  2) Escalation (Telegram/Twilio/beep) after GlobalEscalationDelaySeconds offline");
 
 Console.ReadKey();

@@ -1,6 +1,6 @@
 <template>
   <article
-    class="panel group relative overflow-hidden p-5 transition-all duration-300 animate-fade-in"
+    class="panel group relative min-w-0 overflow-hidden p-5 transition-all duration-300 animate-fade-in"
     :class="cardRingClass"
   >
     <div
@@ -55,12 +55,23 @@
 
     <div
       v-if="!isHealthy"
-      class="relative mt-4 flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2"
+      class="relative mt-4 space-y-2"
     >
-      <span class="text-xs font-medium uppercase tracking-wider text-rose-300">Downtime</span>
-      <span class="font-mono text-sm font-semibold tabular-nums text-rose-200">
-        {{ downtimeLabel }}
-      </span>
+      <div
+        class="flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2"
+      >
+        <span class="text-xs font-medium uppercase tracking-wider text-rose-300">Downtime</span>
+        <span class="font-mono text-sm font-semibold tabular-nums text-rose-200">
+          {{ downtimeLabel }}
+        </span>
+      </div>
+      <div
+        v-if="pulse.escalationTriggered"
+        class="flex items-center justify-between rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2"
+      >
+        <span class="text-xs font-medium uppercase tracking-wider text-amber-300">Escalation</span>
+        <span class="text-xs font-semibold text-amber-200">Triggered</span>
+      </div>
     </div>
   </article>
 </template>
@@ -75,7 +86,7 @@ const props = defineProps<{
   nowMs: number
 }>()
 
-const isHealthy = computed(() => props.pulse.status?.toLowerCase() !== 'offline')
+const isHealthy = computed(() => props.pulse.status === 'Healthy')
 
 const memoryMb = computed(() => parseMemoryMb(props.pulse.metadata))
 

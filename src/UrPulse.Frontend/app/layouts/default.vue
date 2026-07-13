@@ -132,14 +132,14 @@ const { isOnline, latencyMs } = useApiHealth(5000)
 const apiBase = computed(() => config.public.apiBase as string)
 
 const pageTitle = computed(() => {
-  if (route.path.startsWith('/settings')) return 'Settings Vault'
+  if (route.path.startsWith('/settings')) return 'System Settings'
   if (route.path.startsWith('/logs')) return 'Log History'
   return 'Live Dashboard'
 })
 
 const pageSubtitle = computed(() => {
   if (route.path.startsWith('/settings')) {
-    return 'Configure multi-channel escalation alerts per application'
+    return 'Global system tuning and unified alerting configuration'
   }
   if (route.path.startsWith('/logs')) {
     return 'Paginated historical health transitions across all monitored apps'
